@@ -109,3 +109,93 @@ def test_process_aborts_when_exiftool_missing(
     combined = (result.output or "") + (result.stderr or "")
     assert "exiftool" in combined
     assert "brew install exiftool" in combined
+
+
+def test_process_resume_skips_already_processed_videos(scan_root_with_videos: Path) -> None:
+    """A second run with the same scan root should skip everything from the first."""
+    _process(scan_root_with_videos)
+    conn = open_db(scan_root_with_videos)
+    try:
+        first_videos = {v.relative_path for v in list_videos(conn)}
+    finally:
+        conn.close()
+    assert first_videos, "first run should have recorded at least one video"
+
+    # Capture mtimes of the JPGs to verify they weren't rewritten.
+    sample_jpg = next(scan_root_with_videos.glob("*_01.jpg"))
+    mtime_before = sample_jpg.stat().st_mtime_ns
+
+    # Second run.
+    result = runner.invoke(app, ["process", str(scan_root_with_videos), "--min-score", "0"])
+    assert result.exit_code == 0
+
+    conn = open_db(scan_root_with_videos)
+    try:
+        second_videos = {v.relative_path for v in list_videos(conn)}
+    finally:
+        conn.close()
+    # Same set of videos in DB; no duplicates.
+    assert first_videos == second_videos
+
+    # JPG wasn't rewritten on the second run.
+    assert sample_jpg.stat().st_mtime_ns == mtime_before
+
+
+def test_process_force_reprocesses_everything(scan_root_with_videos: Path) -> None:
+    _process(scan_root_with_videos)
+    sample_jpg = next(scan_root_with_videos.glob("*_01.jpg"))
+    mtime_before = sample_jpg.stat().st_mtime_ns
+
+    # Run with --force; the JPG should be regenerated.
+    result = runner.invoke(
+        app, ["process", str(scan_root_with_videos), "--min-score", "0", "--force"]
+    )
+    assert result.exit_code == 0
+    assert sample_jpg.stat().st_mtime_ns >= mtime_before
+
+
+def test_process_continues_after_corrupt_video(
+    scan_root_with_videos: Path, fixtures_dir: Path
+) -> None:
+    """A corrupt video must not crash the run; other videos still get processed."""
+    import shutil as _shutil
+
+    _shutil.copy(fixtures_dir / "corrupt.mp4", scan_root_with_videos)
+
+    result = runner.invoke(app, ["process", str(scan_root_with_videos), "--min-score", "0"])
+    # Exit code 1 because at least one video failed.
+    assert result.exit_code == 1
+    combined = (result.output or "") + (result.stderr or "")
+    assert "corrupt.mp4" in combined  # Listed in summary
+
+    # The non-corrupt videos still produced JPGs.
+    for video in scan_root_with_videos.glob("*.mp4"):
+        if video.name == "corrupt.mp4":
+            continue
+        exports = list(scan_root_with_videos.glob(f"{video.stem}_*.jpg"))
+        assert exports, f"expected exports for {video.name} despite failure of corrupt.mp4"
+
+
+def test_process_exit_zero_when_all_succeed(scan_root_with_videos: Path) -> None:
+    result = runner.invoke(app, ["process", str(scan_root_with_videos), "--min-score", "0"])
+    assert result.exit_code == 0
+
+
+def test_process_does_not_record_failed_video_in_sqlite(
+    scan_root_with_videos: Path, fixtures_dir: Path
+) -> None:
+    """A video that fails to process must NOT leave a row in SQLite.
+
+    This is what lets the next run retry it naturally.
+    """
+    import shutil as _shutil
+
+    _shutil.copy(fixtures_dir / "corrupt.mp4", scan_root_with_videos)
+    runner.invoke(app, ["process", str(scan_root_with_videos), "--min-score", "0"])
+
+    conn = open_db(scan_root_with_videos)
+    try:
+        paths = {v.relative_path for v in list_videos(conn)}
+    finally:
+        conn.close()
+    assert "corrupt.mp4" not in paths
