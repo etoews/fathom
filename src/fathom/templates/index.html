@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>fathom</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+        .jpg-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .jpg-grid img {
+            width: 100%;
+            height: auto;
+            border-radius: 0.25rem;
+            display: block;
+        }
+        nav ul {
+            list-style: none;
+            padding: 0;
+        }
+        nav li {
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <h1>fathom</h1>
+        {% if folders %}
+        <nav aria-label="Folder index">
+            <ul>
+                {% for folder in folders %}
+                <li><a href="#{{ folder.anchor }}">{{ folder.path }}</a></li>
+                {% endfor %}
+            </ul>
+        </nav>
+        {% for folder in folders %}
+        <section id="{{ folder.anchor }}">
+            <h2>{{ folder.path }}</h2>
+            {% for video in folder.videos %}
+            <article>
+                <h3>{{ video.basename }}</h3>
+                {% if video.jpgs %}
+                <div class="jpg-grid">
+                    {% for jpg in video.jpgs %}
+                    <img src="/jpg/{{ jpg }}" alt="{{ jpg }}" loading="lazy">
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p><em>No exports.</em></p>
+                {% endif %}
+            </article>
+            {% endfor %}
+        </section>
+        {% endfor %}
+        {% else %}
+        <p>No videos processed yet. Run <code>fathom process &lt;scan-root&gt;</code> first.</p>
+        {% endif %}
+    </main>
+</body>
+</html>
