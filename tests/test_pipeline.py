@@ -5,6 +5,7 @@ chain. The detailed unit-level event-clustering tests live in test_events.py.
 """
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ import pytest
 
 from fathom.analyser import FrameAnalyser, FrameAnalysis, HeuristicAnalyser
 from fathom.exceptions import ExtractionError
+from fathom.exiftool import EXIFTOOL_BINARY
 from fathom.pipeline import process_video
 from fathom.state import list_frames_for_video, list_videos, open_db
 
@@ -229,3 +231,40 @@ def test_process_video_raises_for_corrupt(scan_root_with_videos: Path, fixtures_
             )
     finally:
         conn.close()
+
+
+def _exif_tag(file: Path, tag: str) -> str:
+    """Read a single EXIF/QuickTime tag value from a file via exiftool."""
+    result = subprocess.run(
+        [EXIFTOOL_BINARY, "-s3", f"-{tag}", str(file)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_exported_jpg_inherits_source_video_create_date(scan_root_with_videos: Path) -> None:
+    """End-to-end EXIF propagation: known-exif.mp4 -> JPG carries the same CreateDate."""
+    video = scan_root_with_videos / "known-exif.mp4"
+    expected = _exif_tag(video, "CreateDate")
+    assert expected, "fixture should have a CreateDate to assert on"
+
+    conn = open_db(scan_root_with_videos)
+    try:
+        count = process_video(
+            video,
+            scan_root_with_videos,
+            conn,
+            _ConstantAnalyser(score=0.9),
+            rate_fps=3.0,
+            max_events=6,
+            min_score=0.5,
+        )
+    finally:
+        conn.close()
+
+    assert count >= 1
+    exported = scan_root_with_videos / f"{video.stem}_01.jpg"
+    assert exported.is_file()
+    assert _exif_tag(exported, "CreateDate") == expected

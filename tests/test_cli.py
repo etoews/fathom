@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from fathom.cli import app
@@ -97,3 +98,14 @@ def test_serve_refuses_when_state_db_missing(tmp_path: Path) -> None:
     result = runner.invoke(app, ["serve", str(tmp_path)])
     assert result.exit_code == 1
     assert "No state DB" in result.output or "No state DB" in (result.stderr or "")
+
+
+def test_process_aborts_when_exiftool_missing(
+    monkeypatch: pytest.MonkeyPatch, scan_root_with_videos: Path
+) -> None:
+    monkeypatch.setattr("fathom.exiftool.shutil.which", lambda _name: None)
+    result = runner.invoke(app, ["process", str(scan_root_with_videos), "--min-score", "0"])
+    assert result.exit_code != 0
+    combined = (result.output or "") + (result.stderr or "")
+    assert "exiftool" in combined
+    assert "brew install exiftool" in combined

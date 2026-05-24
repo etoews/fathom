@@ -17,7 +17,7 @@ from pathlib import Path
 
 import cv2
 
-from fathom import ffmpeg, state
+from fathom import exiftool, ffmpeg, state
 from fathom.analyser import FrameAnalyser
 from fathom.events import ScoredFrame, select_top_events
 from fathom.exceptions import ExtractionError
@@ -81,6 +81,7 @@ def process_video(
         for rank, frame in enumerate(chosen, start=1):
             dest = video.with_name(f"{video.stem}_{rank:02d}.jpg")
             shutil.copy(frame.payload, dest)
+            exiftool.copy_metadata(video, dest)
 
         logger.debug(
             "%s: sampled %d, exported %d (events)",

@@ -11,7 +11,7 @@ from typing import Annotated
 import typer
 import uvicorn
 
-from fathom import _logging, scanner, state
+from fathom import _logging, exiftool, scanner, state
 from fathom.analyser import available_analysers, get_analyser
 from fathom.exceptions import ExtractionError
 from fathom.pipeline import process_video
@@ -73,6 +73,13 @@ def process(
     _logging.configure()
     scan_root = scan_root.resolve()
     logger.info("Scanning %s", scan_root)
+
+    if not exiftool.is_available():
+        typer.echo(
+            "exiftool not found on PATH. Install with: brew install exiftool",
+            err=True,
+        )
+        raise typer.Exit(2)
 
     try:
         analyser = get_analyser(analyser_name)
