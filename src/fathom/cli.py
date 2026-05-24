@@ -10,6 +10,14 @@ from typing import Annotated
 
 import typer
 import uvicorn
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from fathom import _logging, exiftool, scanner, state
 from fathom.analyser import available_analysers, get_analyser
@@ -68,9 +76,24 @@ def process(
             help="Frame sampling rate (frames per second).",
         ),
     ] = 3.0,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Reprocess videos even if they're already in the SQLite state.",
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Emit DEBUG-level logging.",
+        ),
+    ] = False,
 ) -> None:
     """Sample frames, score them, export the top JPGs alongside each video."""
-    _logging.configure()
+    _logging.configure(level="DEBUG" if verbose else "INFO")
     scan_root = scan_root.resolve()
     logger.info("Scanning %s", scan_root)
 
@@ -89,35 +112,60 @@ def process(
         typer.echo(f"Available analysers: {available}", err=True)
         raise typer.Exit(2) from None
 
+    console = Console(stderr=True)
     conn = state.open_db(scan_root)
     try:
+        already_processed = {v.relative_path for v in state.list_videos(conn)}
+        all_videos = list(scanner.find_videos(scan_root))
+        to_process = [
+            v for v in all_videos if force or str(v.relative_to(scan_root)) not in already_processed
+        ]
+        skipped = len(all_videos) - len(to_process)
+        if skipped:
+            logger.info("Skipping %d already-processed video(s); --force to override", skipped)
+
         processed = 0
-        failed = 0
         total_exports = 0
-        for video in scanner.find_videos(scan_root):
-            rel = str(video.relative_to(scan_root))
-            try:
-                exported = process_video(
-                    video,
-                    scan_root,
-                    conn,
-                    analyser,
-                    rate_fps=rate,
-                    max_events=max_events,
-                    min_score=min_score,
-                )
-                processed += 1
-                total_exports += exported
-                logger.info("Processed %s (%d exported)", rel, exported)
-            except ExtractionError as e:
-                failed += 1
-                logger.error("Failed on %s: %s", rel, e)
-        logger.info(
-            "Processed %d videos, %d exports, %d failed",
-            processed,
-            total_exports,
-            failed,
+        failures: list[tuple[str, str]] = []
+
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task("Processing", total=len(to_process))
+            for video in to_process:
+                rel = str(video.relative_to(scan_root))
+                progress.update(task, description=rel)
+                try:
+                    exported = process_video(
+                        video,
+                        scan_root,
+                        conn,
+                        analyser,
+                        rate_fps=rate,
+                        max_events=max_events,
+                        min_score=min_score,
+                    )
+                    processed += 1
+                    total_exports += exported
+                except ExtractionError as e:
+                    failures.append((rel, str(e)))
+                    logger.error("Failed on %s: %s", rel, e)
+                progress.update(task, advance=1)
+
+        console.print(
+            f"Processed {processed} video(s), {total_exports} export(s), "
+            f"{len(failures)} failure(s), {skipped} skipped"
         )
+        if failures:
+            console.print("Failures:", style="bold red")
+            for rel, err in failures:
+                console.print(f"  {rel}: {err}", style="red")
+            raise typer.Exit(1)
     finally:
         conn.close()
 
