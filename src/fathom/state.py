@@ -122,6 +122,19 @@ def clear_frames_for_video(conn: sqlite3.Connection, video_id: int) -> int:
     return cur.rowcount
 
 
+def delete_videos(conn: sqlite3.Connection, video_ids: list[int]) -> int:
+    """Delete videos by id, cascading to their frame rows. Returns rows affected."""
+    if not video_ids:
+        return 0
+    placeholders = ",".join(["?"] * len(video_ids))
+    cur = conn.execute(
+        f"DELETE FROM videos WHERE id IN ({placeholders})",
+        video_ids,
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def record_frame(
     conn: sqlite3.Connection,
     video_id: int,

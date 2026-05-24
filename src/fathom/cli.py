@@ -4,6 +4,7 @@ Two commands: `process` (the extraction pipeline) and `serve` (the review
 server). They share the SQLite state at `<scan-root>/.fathom/state.db`.
 """
 
+import contextlib
 import logging
 from pathlib import Path
 from typing import Annotated
@@ -31,6 +32,12 @@ app = typer.Typer(
     no_args_is_help=True,
     help="Pull the best frames from scuba diving videos.",
 )
+
+trash_app = typer.Typer(
+    no_args_is_help=True,
+    help="Manage the .fathom/.trash/ folder.",
+)
+app.add_typer(trash_app, name="trash")
 
 
 @app.command()
@@ -196,3 +203,93 @@ def serve(
     fastapi_app = create_app(scan_root)
     logger.info("Serving %s on http://localhost:%d", scan_root, port)
     uvicorn.run(fastapi_app, host="127.0.0.1", port=port, log_level="info")
+
+
+@trash_app.command("empty")
+def trash_empty(
+    scan_root: Annotated[
+        Path,
+        typer.Argument(
+            help="The scan root whose .fathom/.trash/ should be emptied.",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+        ),
+    ],
+) -> None:
+    """Permanently delete the contents of <scan-root>/.fathom/.trash/."""
+    scan_root = scan_root.resolve()
+    trash_dir = state.state_dir(scan_root) / ".trash"
+
+    if not trash_dir.is_dir():
+        typer.echo("Trash is already empty.")
+        return
+
+    files = [p for p in trash_dir.rglob("*") if p.is_file()]
+    if not files:
+        typer.echo("Trash is already empty.")
+        return
+
+    typer.echo(f"{len(files)} file(s) under {trash_dir}:")
+    for f in files:
+        typer.echo(f"  {f.relative_to(trash_dir)}")
+    if not typer.confirm("Permanently delete all of these?", default=False):
+        typer.echo("Aborted; trash left intact.")
+        return
+
+    for f in files:
+        f.unlink()
+    # Remove now-empty subdirectories.
+    for sub in sorted(
+        (p for p in trash_dir.rglob("*") if p.is_dir()),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    ):
+        with contextlib.suppress(OSError):
+            sub.rmdir()
+    typer.echo(f"Removed {len(files)} file(s).")
+
+
+@app.command()
+def clean(
+    scan_root: Annotated[
+        Path,
+        typer.Argument(
+            help="The scan root whose SQLite to prune.",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+        ),
+    ],
+) -> None:
+    """Remove SQLite rows for videos that no longer exist on disk.
+
+    Does NOT delete any JPGs or video files — only prunes the state DB.
+    """
+    scan_root = scan_root.resolve()
+    db_path = state.state_db_path(scan_root)
+    if not db_path.exists():
+        typer.echo(f"No state DB at {db_path}; nothing to clean.")
+        return
+
+    conn = state.open_db(scan_root)
+    try:
+        all_videos = state.list_videos(conn)
+        stale = [v for v in all_videos if not (scan_root / v.relative_path).exists()]
+        if not stale:
+            typer.echo(f"No stale rows ({len(all_videos)} video row(s) all have files on disk).")
+            return
+
+        typer.echo(f"{len(stale)} stale row(s):")
+        for v in stale:
+            typer.echo(f"  {v.relative_path}")
+        if not typer.confirm(
+            "Remove these rows (and their frames) from the state DB?", default=False
+        ):
+            typer.echo("Aborted; SQLite left intact.")
+            return
+
+        removed = state.delete_videos(conn, [v.id for v in stale])
+        typer.echo(f"Removed {removed} video row(s).")
+    finally:
+        conn.close()
