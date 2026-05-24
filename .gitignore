@@ -10,3 +10,4 @@ build/
 .fathom/
 tests/fixtures/private/*
 !tests/fixtures/private/README.md
+.obsidian/
