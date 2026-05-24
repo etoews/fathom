@@ -12,7 +12,7 @@ cli_runner = CliRunner()
 
 
 def _process(scan_root: Path) -> None:
-    result = cli_runner.invoke(app, ["process", str(scan_root)])
+    result = cli_runner.invoke(app, ["process", str(scan_root), "--min-score", "0"])
     assert result.exit_code == 0, result.output
 
 

@@ -1,7 +1,7 @@
 """Subprocess wrappers for ffmpeg and ffprobe.
 
-Kept deliberately thin so future analysers can compose these primitives
-without inheriting pipeline behaviour.
+Kept deliberately thin so the pipeline can compose these primitives without
+inheriting unrelated behaviour.
 """
 
 import subprocess
@@ -86,3 +86,52 @@ def extract_frame(
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode(errors="replace").strip()
         raise ExtractionError(f"ffmpeg failed on {video} at {timestamp_seconds}s: {stderr}") from e
+
+
+def sample_frames(
+    video: Path,
+    rate_fps: float,
+    output_dir: Path,
+    quality: int = 2,
+) -> list[Path]:
+    """Sample frames from `video` at `rate_fps` into `output_dir`.
+
+    Files are written as `frame_NNNNNN.jpg` (zero-padded, 1-indexed) in
+    timestamp order. The timestamp of frame N (1-indexed) is approximately
+    `(N - 1) / rate_fps` seconds.
+
+    Returns the list of created JPG paths in timestamp order.
+
+    Raises:
+        ExtractionError: If ffmpeg fails.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pattern = str(output_dir / "frame_%06d.jpg")
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(video),
+                "-vf",
+                f"fps={rate_fps}",
+                "-q:v",
+                str(quality),
+                pattern,
+            ],
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="replace").strip()
+        raise ExtractionError(f"ffmpeg fps sampling failed on {video}: {stderr}") from e
+
+    return sorted(output_dir.glob("frame_*.jpg"))
+
+
+def timestamp_for_index(index: int, rate_fps: float) -> float:
+    """Approximate timestamp (seconds) of the Nth sampled frame at `rate_fps`."""
+    return (index - 1) / rate_fps
