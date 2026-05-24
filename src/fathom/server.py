@@ -2,19 +2,23 @@
 
 Reads from SQLite to know which videos exist, walks the filesystem to find
 their corresponding exported JPGs, and renders one section per leaf folder.
+Per-image delete moves the file to `<scan-root>/.fathom/.trash/` preserving
+the relative path.
 """
 
+import shutil
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from fathom import state
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+TRASH_SUBDIR = Path(state.STATE_DIR_NAME) / ".trash"
 
 
 @dataclass(frozen=True)
@@ -94,5 +98,32 @@ def create_app(scan_root: Path) -> FastAPI:
         if not target.is_file() or target.suffix.lower() != ".jpg":
             raise HTTPException(status_code=404)
         return FileResponse(target)
+
+    @fastapi_app.delete("/api/exports", status_code=204)
+    def delete_export(path: str) -> Response:
+        if not path.endswith(".jpg"):
+            raise HTTPException(status_code=400, detail="Not a JPG path")
+
+        target = (resolved_root / path).resolve()
+        if not target.is_relative_to(resolved_root):
+            raise HTTPException(status_code=400, detail="Outside scan root")
+
+        # Never delete from inside the trash itself.
+        trash_root = (resolved_root / TRASH_SUBDIR).resolve()
+        if target.is_relative_to(trash_root):
+            raise HTTPException(status_code=400, detail="Cannot delete trash contents")
+
+        if not target.is_file():
+            raise HTTPException(status_code=404)
+
+        rel = target.relative_to(resolved_root)
+        trash_dest = resolved_root / TRASH_SUBDIR / rel
+        trash_dest.parent.mkdir(parents=True, exist_ok=True)
+        # If the same name has been trashed before, overwrite (the most recent
+        # delete wins; rare in practice since exports are deterministic per run).
+        if trash_dest.exists():
+            trash_dest.unlink()
+        shutil.move(target, trash_dest)
+        return Response(status_code=204)
 
     return fastapi_app

@@ -12,11 +12,41 @@
             gap: 0.5rem;
             margin-bottom: 1rem;
         }
-        .jpg-grid img {
+        .jpg-card {
+            position: relative;
+            transition: opacity 0.2s ease-out;
+        }
+        .jpg-card img {
             width: 100%;
             height: auto;
             border-radius: 0.25rem;
             display: block;
+        }
+        .jpg-card .trash-btn {
+            position: absolute;
+            top: 0.4rem;
+            right: 0.4rem;
+            background: rgba(0, 0, 0, 0.65);
+            color: white;
+            border: none;
+            padding: 0.3rem 0.55rem;
+            border-radius: 0.3rem;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s ease-in-out;
+            font-size: 0.9rem;
+            line-height: 1;
+            margin: 0;
+        }
+        .jpg-card:hover .trash-btn,
+        .jpg-card:focus-within .trash-btn {
+            opacity: 1;
+        }
+        .jpg-card.deleting {
+            opacity: 0;
+        }
+        .jpg-card.delete-error {
+            outline: 2px solid #d62828;
         }
         nav ul {
             list-style: none;
@@ -48,7 +78,10 @@
                 {% if video.jpgs %}
                 <div class="jpg-grid">
                     {% for jpg in video.jpgs %}
-                    <img src="/jpg/{{ jpg }}" alt="{{ jpg }}" loading="lazy">
+                    <div class="jpg-card">
+                        <img src="/jpg/{{ jpg }}" alt="{{ jpg }}" loading="lazy">
+                        <button type="button" class="trash-btn" data-path="{{ jpg }}" aria-label="Delete {{ jpg }}">Trash</button>
+                    </div>
                     {% endfor %}
                 </div>
                 {% else %}
@@ -62,5 +95,31 @@
         <p>No videos processed yet. Run <code>fathom process &lt;scan-root&gt;</code> first.</p>
         {% endif %}
     </main>
+    <script>
+        document.addEventListener("click", async (event) => {
+            const button = event.target.closest(".trash-btn");
+            if (!button) return;
+            const card = button.closest(".jpg-card");
+            const path = button.dataset.path;
+            if (!card || !path) return;
+            button.disabled = true;
+            try {
+                const url = "/api/exports?path=" + encodeURIComponent(path);
+                const response = await fetch(url, { method: "DELETE" });
+                if (response.ok) {
+                    card.classList.add("deleting");
+                    setTimeout(() => card.remove(), 200);
+                } else {
+                    card.classList.add("delete-error");
+                    button.disabled = false;
+                    setTimeout(() => card.classList.remove("delete-error"), 2000);
+                }
+            } catch (_err) {
+                card.classList.add("delete-error");
+                button.disabled = false;
+                setTimeout(() => card.classList.remove("delete-error"), 2000);
+            }
+        });
+    </script>
 </body>
 </html>
